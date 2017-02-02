@@ -17,7 +17,8 @@
 ## along with this library.  If not, see <http://www.gnu.org/licenses/>.
 ##
 
-OBJS = ../common/button_boot.o
+CFLAGS += -I../../libdw1000/inc
+OBJS = ../common/button_boot.o ../../libdw1000/src/libdw1000Spi.o ../../libdw1000/src/libdw1000.o
 
 BINARY = safe-anchor
 

@@ -26,10 +26,73 @@
 #include <libopencm3/usb/usbd.h>
 #include <libopencm3/usb/cdc.h>
 
+#include "libdw1000.h"
+
 #define MOSI GPIO7
 #define MISO GPIO6
 #define CLK GPIO5
 #define CS GPIO4
+
+static void spiRead(dwDevice_t *dwDev, const void *header, size_t headerLength,
+                    void *data, size_t dataLength)
+{
+    (void)dwDev;
+
+    gpio_clear(GPIOA, CS);
+
+    for (size_t i = 0; i < headerLength; i++)
+        (void)spi_xfer(SPI1, ((uint8_t *)header)[i]);
+
+    for (size_t i = 0; i < dataLength; i++)
+        ((uint8_t *)data)[i] = spi_xfer(SPI1, 0x00);
+
+    gpio_set(GPIOA, CS);
+}
+
+static void spiWrite(dwDevice_t *dwDev, const void *header, size_t headerLength,
+                     const void *data, size_t dataLength)
+{
+    (void)dwDev;
+
+    gpio_clear(GPIOA, CS);
+
+    for (size_t i = 0; i < headerLength; i++)
+        (void)spi_xfer(SPI1, ((uint8_t *)header)[i]);
+
+    for (size_t i = 0; i < dataLength; i++)
+        (void)spi_xfer(SPI1, ((uint8_t *)data)[i]);
+
+    gpio_set(GPIOA, CS);
+}
+
+static void spiSetSpeed(dwDevice_t *dwDev, dwSpiSpeed_t speed)
+{
+    (void)dwDev;
+    (void)speed;
+}
+
+static void delayms(dwDevice_t *dwDev, unsigned int delay)
+{
+    (void)dwDev;
+    (void)delay;
+
+    for (int i = 0; i < 60000; i++)
+        __asm__("nop");
+}
+
+// static void reset(dwDevice_t *dwDev)
+// {
+//     (void)dwDev;
+// }
+
+static dwOps_t dwOps = {
+    .spiRead = spiRead,
+    .spiWrite = spiWrite,
+    .spiSetSpeed = spiSetSpeed,
+    .delayms = delayms,
+    .reset = NULL};
+
+static dwDevice_t dwDev;
 
 static const struct usb_device_descriptor dev = {
     .bLength = USB_DT_DEVICE_SIZE,
@@ -80,11 +143,12 @@ static const struct usb_endpoint_descriptor data_endp[] = {
         .bInterval = 1,
     }};
 
-static const struct {
-  struct usb_cdc_header_descriptor header;
-  struct usb_cdc_call_management_descriptor call_mgmt;
-  struct usb_cdc_acm_descriptor acm;
-  struct usb_cdc_union_descriptor cdc_union;
+static const struct
+{
+    struct usb_cdc_header_descriptor header;
+    struct usb_cdc_call_management_descriptor call_mgmt;
+    struct usb_cdc_acm_descriptor acm;
+    struct usb_cdc_union_descriptor cdc_union;
 } __attribute__((packed)) cdcacm_functional_descriptors = {
     .header =
         {
@@ -178,133 +242,140 @@ uint8_t usbd_control_buffer[128];
 static int cdcacm_control_request(
     usbd_device *usbd_dev, struct usb_setup_data *req, uint8_t **buf,
     uint16_t *len,
-    void (**complete)(usbd_device *usbd_dev, struct usb_setup_data *req)) {
-  (void)complete;
-  (void)buf;
-  (void)usbd_dev;
+    void (**complete)(usbd_device *usbd_dev, struct usb_setup_data *req))
+{
+    (void)complete;
+    (void)buf;
+    (void)usbd_dev;
 
-  switch (req->bRequest) {
-    case USB_CDC_REQ_SET_CONTROL_LINE_STATE: {
-      /*
+    switch (req->bRequest)
+    {
+    case USB_CDC_REQ_SET_CONTROL_LINE_STATE:
+    {
+        /*
        * This Linux cdc_acm driver requires this to be implemented
        * even though it's optional in the CDC spec, and we don't
        * advertise it in the ACM functional descriptor.
        */
-      return 1;
+        return 1;
     }
     case USB_CDC_REQ_SET_LINE_CODING:
-      if (*len < sizeof(struct usb_cdc_line_coding)) {
-        return 0;
-      }
+        if (*len < sizeof(struct usb_cdc_line_coding))
+        {
+            return 0;
+        }
 
-      return 1;
-  }
-  return 0;
+        return 1;
+    }
+    return 0;
 }
 
-static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep) {
-  (void)ep;
+static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
+{
+    (void)ep;
 
-  char buf[64];
-  int len = usbd_ep_read_packet(usbd_dev, 0x01, buf, 64);
+    char buf[64];
+    int len = usbd_ep_read_packet(usbd_dev, 0x01, buf, 64);
 
-  gpio_clear(GPIOA, CS);
+    uint32_t dwId = dwGetDeviceId(&dwDev);
+    buf[0] = (dwId >> 24) & 0xff;
+    buf[1] = (dwId >> 16) & 0xff;
+    buf[2] = (dwId >> 8) & 0xff;
+    buf[3] = dwId & 0xff;
 
-  (void)spi_xfer(SPI1, 0x00);
-
-  buf[0] = spi_xfer(SPI1, 0x00);
-  buf[1] = spi_xfer(SPI1, 0x00);
-  buf[2] = spi_xfer(SPI1, 0x00);
-  buf[3] = spi_xfer(SPI1, 0x00);
-
-  gpio_set(GPIOA, CS);
-
-  // toogle led
-  gpio_toggle(GPIOA, GPIO8);
-
-  if (len) {
-    while (usbd_ep_write_packet(usbd_dev, 0x82, buf, 4) == 0)
-      ;
-  }
+    if (len)
+    {
+        while (usbd_ep_write_packet(usbd_dev, 0x82, buf, 4) == 0)
+            ;
+    }
 }
 
-static void cdcacm_set_config(usbd_device *usbd_dev, uint16_t wValue) {
-  (void)wValue;
+static void cdcacm_set_config(usbd_device *usbd_dev, uint16_t wValue)
+{
+    (void)wValue;
 
-  usbd_ep_setup(usbd_dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, cdcacm_data_rx_cb);
-  usbd_ep_setup(usbd_dev, 0x82, USB_ENDPOINT_ATTR_BULK, 64, NULL);
-  usbd_ep_setup(usbd_dev, 0x83, USB_ENDPOINT_ATTR_INTERRUPT, 16, NULL);
+    usbd_ep_setup(usbd_dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, cdcacm_data_rx_cb);
+    usbd_ep_setup(usbd_dev, 0x82, USB_ENDPOINT_ATTR_BULK, 64, NULL);
+    usbd_ep_setup(usbd_dev, 0x83, USB_ENDPOINT_ATTR_INTERRUPT, 16, NULL);
 
-  usbd_register_control_callback(
-      usbd_dev, USB_REQ_TYPE_CLASS | USB_REQ_TYPE_INTERFACE,
-      USB_REQ_TYPE_TYPE | USB_REQ_TYPE_RECIPIENT, cdcacm_control_request);
+    usbd_register_control_callback(
+        usbd_dev, USB_REQ_TYPE_CLASS | USB_REQ_TYPE_INTERFACE,
+        USB_REQ_TYPE_TYPE | USB_REQ_TYPE_RECIPIENT, cdcacm_control_request);
 }
 
 static void setup_boot_button(void) { button_boot(); }
 
-static void setup_clock(void) {
-  rcc_clock_setup_hse_3v3(&rcc_hse_25mhz_3v3[RCC_CLOCK_3V3_168MHZ]);
+static void setup_clock(void)
+{
+    rcc_clock_setup_hse_3v3(&rcc_hse_25mhz_3v3[RCC_CLOCK_3V3_168MHZ]);
 }
 
-static void setup_leds(void) {
-  rcc_periph_clock_enable(RCC_GPIOA);
-  gpio_mode_setup(GPIOA, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO8);
+static void setup_leds(void)
+{
+    rcc_periph_clock_enable(RCC_GPIOA);
+    gpio_mode_setup(GPIOA, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO8);
 }
 
-static void setup_usb(usbd_device **usbd_dev) {
-  rcc_periph_clock_enable(RCC_OTGFS);
-  gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO9 | GPIO11 | GPIO12);
-  gpio_set_af(GPIOA, GPIO_AF10, GPIO9 | GPIO11 | GPIO12);
+static void setup_usb(usbd_device **usbd_dev)
+{
+    rcc_periph_clock_enable(RCC_OTGFS);
+    gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO9 | GPIO11 | GPIO12);
+    gpio_set_af(GPIOA, GPIO_AF10, GPIO9 | GPIO11 | GPIO12);
 
-  *usbd_dev = usbd_init(&otgfs_usb_driver, &dev, &config, usb_strings, 3,
-                        usbd_control_buffer, sizeof(usbd_control_buffer));
+    *usbd_dev = usbd_init(&otgfs_usb_driver, &dev, &config, usb_strings, 3,
+                          usbd_control_buffer, sizeof(usbd_control_buffer));
 
-  usbd_register_set_config_callback(*usbd_dev, cdcacm_set_config);
+    usbd_register_set_config_callback(*usbd_dev, cdcacm_set_config);
 }
 
-static void setup_spi(void) {
-  /*
+static void setup_spi(void)
+{
+    /*
     MOSI: PA7
     MISO: PA6
     CLK : PA5
     CS  : PA4
   */
 
-  /* chip select */
-  gpio_mode_setup(GPIOA, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, CS);
-  gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, CLK | MISO | MOSI);
+    /* chip select */
+    gpio_mode_setup(GPIOA, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, CS);
+    gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, CLK | MISO | MOSI);
 
-  rcc_periph_clock_enable(RCC_SPI1);
+    rcc_periph_clock_enable(RCC_SPI1);
 
-  /* set to high which is not-selected */
-  gpio_set(GPIOA, CS);
+    /* set to high which is not-selected */
+    gpio_set(GPIOA, CS);
 
-  gpio_set_af(GPIOA, GPIO_AF5, CLK | MISO | MOSI);
+    gpio_set_af(GPIOA, GPIO_AF5, CLK | MISO | MOSI);
 
-  spi_init_master(SPI1, SPI_CR1_BAUDRATE_FPCLK_DIV_256,
-                  /* high or low for the peripheral device */
-                  SPI_CR1_CPOL_CLK_TO_0_WHEN_IDLE,
-                  /* CPHA: Clock phase: read on rising edge of clock */
-                  SPI_CR1_CPHA_CLK_TRANSITION_1,
-                  /* DFF: Date frame format (8 or 16 bit) */
-                  SPI_CR1_DFF_8BIT,
-                  /* Most or Least Sig Bit First */
-                  SPI_CR1_MSBFIRST);
+    spi_init_master(SPI1, SPI_CR1_BAUDRATE_FPCLK_DIV_256,
+                    /* high or low for the peripheral device */
+                    SPI_CR1_CPOL_CLK_TO_0_WHEN_IDLE,
+                    /* CPHA: Clock phase: read on rising edge of clock */
+                    SPI_CR1_CPHA_CLK_TRANSITION_1,
+                    /* DFF: Date frame format (8 or 16 bit) */
+                    SPI_CR1_DFF_8BIT,
+                    /* Most or Least Sig Bit First */
+                    SPI_CR1_MSBFIRST);
 
-  spi_enable(SPI1);
+    spi_enable(SPI1);
 }
 
-int main(void) {
-  usbd_device *usbd_dev = NULL;
+int main(void)
+{
+    usbd_device *usbd_dev = NULL;
 
-  setup_boot_button();
+    setup_boot_button();
 
-  setup_clock();
-  setup_leds();
-  setup_usb(&usbd_dev);
-  setup_spi();
+    setup_clock();
+    setup_leds();
+    setup_usb(&usbd_dev);
+    setup_spi();
 
-  while (1) {
-    usbd_poll(usbd_dev);
-  }
+    dwInit(&dwDev, &dwOps);
+
+    while (1)
+    {
+        usbd_poll(usbd_dev);
+    }
 }
