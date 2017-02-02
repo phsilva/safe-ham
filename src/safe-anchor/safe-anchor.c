@@ -25,6 +25,8 @@
 #include <libopencm3/stm32/spi.h>
 #include <libopencm3/usb/usbd.h>
 #include <libopencm3/usb/cdc.h>
+#include <libopencm3/cm3/nvic.h> // for sys_tick_handler
+#include <libopencm3/cm3/systick.h>
 
 #include "libdw1000.h"
 
@@ -32,6 +34,8 @@
 #define MISO GPIO6
 #define CLK GPIO5
 #define CS GPIO4
+
+static void msleep(uint32_t delay);
 
 static void spiRead(dwDevice_t *dwDev, const void *header, size_t headerLength,
                     void *data, size_t dataLength)
@@ -74,16 +78,8 @@ static void spiSetSpeed(dwDevice_t *dwDev, dwSpiSpeed_t speed)
 static void delayms(dwDevice_t *dwDev, unsigned int delay)
 {
     (void)dwDev;
-    (void)delay;
-
-    for (int i = 0; i < 60000; i++)
-        __asm__("nop");
+    msleep(delay);
 }
-
-// static void reset(dwDevice_t *dwDev)
-// {
-//     (void)dwDev;
-// }
 
 static dwOps_t dwOps = {
     .spiRead = spiRead,
@@ -361,6 +357,32 @@ static void setup_spi(void)
     spi_enable(SPI1);
 }
 
+static void setup_systick(void)
+{
+    /* clock rate / 1000 to get 1mS interrupt rate */
+    systick_set_reload(168000);
+    systick_set_clocksource(STK_CSR_CLKSOURCE_AHB);
+    systick_counter_enable();
+    /* this done last */
+    systick_interrupt_enable();
+}
+
+volatile uint32_t system_millis;
+
+/* Called when systick fires */
+void sys_tick_handler(void)
+{
+    system_millis++;
+}
+
+/* sleep for delay milliseconds */
+static void msleep(uint32_t delay)
+{
+    uint32_t wake = system_millis + delay;
+    while (wake > system_millis)
+        ;
+}
+
 int main(void)
 {
     usbd_device *usbd_dev = NULL;
@@ -371,6 +393,7 @@ int main(void)
     setup_leds();
     setup_usb(&usbd_dev);
     setup_spi();
+    setup_systick();
 
     dwInit(&dwDev, &dwOps);
 
