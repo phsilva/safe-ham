@@ -35,12 +35,21 @@
 #define CLK GPIO5
 #define CS GPIO4
 
+// TODO: add printf support (USART/USB)
+// TODO: add FreeRTOS (task manaager, USB, DW1000, others)
+// TODO: clear interruptions while sending SPI to DW1000
+// understand interrupts
+// understand USB CDC
+// undestand systick
+// understand data format DW1000
+// delays
+
 static void msleep(uint32_t delay);
 
-static void spiRead(dwDevice_t *dwDev, const void *header, size_t headerLength,
+static void spiRead(dwDevice_t *dwm, const void *header, size_t headerLength,
                     void *data, size_t dataLength)
 {
-    (void)dwDev;
+    (void)dwm;
 
     gpio_clear(GPIOA, CS);
 
@@ -53,10 +62,10 @@ static void spiRead(dwDevice_t *dwDev, const void *header, size_t headerLength,
     gpio_set(GPIOA, CS);
 }
 
-static void spiWrite(dwDevice_t *dwDev, const void *header, size_t headerLength,
+static void spiWrite(dwDevice_t *dwm, const void *header, size_t headerLength,
                      const void *data, size_t dataLength)
 {
-    (void)dwDev;
+    (void)dwm;
 
     gpio_clear(GPIOA, CS);
 
@@ -69,15 +78,15 @@ static void spiWrite(dwDevice_t *dwDev, const void *header, size_t headerLength,
     gpio_set(GPIOA, CS);
 }
 
-static void spiSetSpeed(dwDevice_t *dwDev, dwSpiSpeed_t speed)
+static void spiSetSpeed(dwDevice_t *dwm, dwSpiSpeed_t speed)
 {
-    (void)dwDev;
+    (void)dwm;
     (void)speed;
 }
 
-static void delayms(dwDevice_t *dwDev, unsigned int delay)
+static void delayms(dwDevice_t *dwm, unsigned int delay)
 {
-    (void)dwDev;
+    (void)dwm;
     msleep(delay);
 }
 
@@ -88,7 +97,8 @@ static dwOps_t dwOps = {
     .delayms = delayms,
     .reset = NULL};
 
-static dwDevice_t dwDev;
+static dwDevice_t dwm_device;
+static dwDevice_t *dwm = &dwm_device;
 
 static const struct usb_device_descriptor dev = {
     .bLength = USB_DT_DEVICE_SIZE,
@@ -266,6 +276,12 @@ static int cdcacm_control_request(
     return 0;
 }
 
+// int _write(int file, char *ptr, int len)
+// {
+// 	errno = EIO;
+// 	return -1;
+// }
+
 static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 {
     (void)ep;
@@ -273,7 +289,7 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
     char buf[64];
     int len = usbd_ep_read_packet(usbd_dev, 0x01, buf, 64);
 
-    uint32_t dwId = dwGetDeviceId(&dwDev);
+    uint32_t dwId = dwGetDeviceId(dwm);
     buf[0] = (dwId >> 24) & 0xff;
     buf[1] = (dwId >> 16) & 0xff;
     buf[2] = (dwId >> 8) & 0xff;
@@ -383,6 +399,22 @@ static void msleep(uint32_t delay)
         ;
 }
 
+static void txcallback(dwDevice_t *dev)
+{
+}
+
+static void rxcallback(dwDevice_t *dev)
+{
+}
+
+static void rxTimeoutCallback(dwDevice_t *dev)
+{
+}
+
+static void rxfailedcallback(dwDevice_t *dev)
+{
+}
+
 int main(void)
 {
     usbd_device *usbd_dev = NULL;
@@ -395,10 +427,29 @@ int main(void)
     setup_spi();
     setup_systick();
 
-    dwInit(&dwDev, &dwOps);
+    // originally part of crazyflie init code
+    dwInit(dwm, &dwOps); // Init libdw
+    dwConfigure(dwm);    // Configure the dw1000 chip
+
+    dwTime_t delay = {.full = 0};
+    dwSetAntenaDelay(dwm, delay);
+
+    dwAttachSentHandler(dwm, txcallback);
+    dwAttachReceivedHandler(dwm, rxcallback);
+    dwAttachReceiveTimeoutHandler(dwm, rxTimeoutCallback);
+    dwAttachReceiveFailedHandler(dwm, rxfailedcallback);
+
+    dwNewConfiguration(dwm);
+    dwSetDefaults(dwm);
+    dwEnableMode(dwm, MODE_SHORTDATA_FAST_ACCURACY);
+    dwSetChannel(dwm, CHANNEL_2);
+    dwSetPreambleCode(dwm, PREAMBLE_CODE_64MHZ_9);
+
+    dwCommitConfiguration(dwm);
 
     while (1)
     {
         usbd_poll(usbd_dev);
+        dwHandleInterrupt(dwm);
     }
 }
