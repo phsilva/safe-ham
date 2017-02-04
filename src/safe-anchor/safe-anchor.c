@@ -20,6 +20,7 @@
 #include "../common/button_boot.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/stm32/spi.h>
@@ -30,6 +31,9 @@
 
 #include "libdw1000.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 #define MOSI GPIO7
 #define MISO GPIO6
 #define CLK GPIO5
@@ -37,14 +41,47 @@
 
 // TODO: add printf support (USART/USB)
 // TODO: add FreeRTOS (task manaager, USB, DW1000, others)
+
 // TODO: clear interruptions while sending SPI to DW1000
+//  CM_ATOMIC_BLOCK in cortex.h
+
 // understand interrupts
+// 	nvic_set_priority(NVIC_DMA1_CHANNEL7_IRQ, 0);
+//  nvic_enable_irq(NVIC_DMA1_CHANNEL7_IRQ);
+//  convention defines the interrupt service routines name (irq_name__isr)
+//  per chip defined in vector_nvic.h
+
 // understand USB CDC
 // undestand systick
 // understand data format DW1000
-// delays
+// how to delays and execute?
 
-static void msleep(uint32_t delay);
+static void msleep(uint32_t delay)
+{
+    vTaskDelay(delay / portTICK_PERIOD_MS);
+}
+
+void ledOn(void)
+{
+    gpio_clear(GPIOA, GPIO8);
+}
+
+static void ledOff(void)
+{
+    gpio_set(GPIOA, GPIO8);
+}
+static void debugLed(uint8_t n)
+{
+    for (uint8_t i = 0; i < n; i++)
+    {
+        ledOn();
+        msleep(300);
+        ledOff();
+        msleep(300);
+    }
+
+    msleep(1000);
+}
 
 static void spiRead(dwDevice_t *dwm, const void *header, size_t headerLength,
                     void *data, size_t dataLength)
@@ -100,6 +137,20 @@ static dwOps_t dwOps = {
 static dwDevice_t dwm_device;
 static dwDevice_t *dwm = &dwm_device;
 
+// fev 04 15:17:49 localhost.localdomain kernel: usb 2-2.2: new full-speed USB device number 8 using uhci_hcd
+// fev 04 15:17:50 localhost.localdomain kernel: usb 2-2.2: New USB device found, idVendor=0483, idProduct=5740
+// fev 04 15:17:50 localhost.localdomain kernel: usb 2-2.2: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+// fev 04 15:17:50 localhost.localdomain kernel: usb 2-2.2: Product: SafeHAM
+// fev 04 15:17:50 localhost.localdomain kernel: usb 2-2.2: Manufacturer: Hamilton Positioning
+// fev 04 15:17:50 localhost.localdomain kernel: usb 2-2.2: SerialNumber: DEMO
+// fev 04 15:17:51 localhost.localdomain mtp-probe[36625]: checking bus 2, device 8: "/sys/devices/pci0000:00/0000:00:11.0/0000:02:00.0/usb2/2-2/2-2.2"
+// fev 04 15:17:51 localhost.localdomain mtp-probe[36625]: bus: 2, device: 8 was not an MTP device
+// fev 04 15:17:51 localhost.localdomain kernel: cdc_acm 2-2.2:1.0: ttyACM0: USB ACM device
+// fev 04 15:17:51 localhost.localdomain kernel: usbcore: registered new interface driver cdc_acm
+// fev 04 15:17:51 localhost.localdomain kernel: cdc_acm: USB Abstract Control Model driver for USB modems and ISDN adapters
+
+// xPortPendSVHandler
+
 static const struct usb_device_descriptor dev = {
     .bLength = USB_DT_DEVICE_SIZE,
     .bDescriptorType = USB_DT_DEVICE,
@@ -108,8 +159,8 @@ static const struct usb_device_descriptor dev = {
     .bDeviceSubClass = 0,
     .bDeviceProtocol = 0,
     .bMaxPacketSize0 = 64,
-    .idVendor = 0x0483,
-    .idProduct = 0x5740,
+    .idVendor = 0x0483,  // STMicroelectronics
+    .idProduct = 0x5740, // STM32F407
     .bcdDevice = 0x0200,
     .iManufacturer = 1,
     .iProduct = 2,
@@ -242,6 +293,8 @@ static const char *usb_strings[] = {
     "Hamilton Positioning", "SafeHAM", "DEMO",
 };
 
+static usbd_device *globalUSB;
+
 /* Buffer to be used for control requests. */
 uint8_t usbd_control_buffer[128];
 
@@ -270,17 +323,22 @@ static int cdcacm_control_request(
         {
             return 0;
         }
-
         return 1;
     }
     return 0;
 }
 
-// int _write(int file, char *ptr, int len)
-// {
-// 	errno = EIO;
-// 	return -1;
-// }
+int _write(int file, char *ptr, int len)
+{
+    if (len)
+    {
+        // FIXME: how to deal with more than 64 bytes?
+        usbd_ep_write_packet(globalUSB, 0x82, ptr, len);
+        return len;
+    }
+
+    return -1;
+}
 
 static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 {
@@ -289,25 +347,30 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
     char buf[64];
     int len = usbd_ep_read_packet(usbd_dev, 0x01, buf, 64);
 
+    // debugLed(2);
+
     uint32_t dwId = dwGetDeviceId(dwm);
     buf[0] = (dwId >> 24) & 0xff;
     buf[1] = (dwId >> 16) & 0xff;
     buf[2] = (dwId >> 8) & 0xff;
     buf[3] = dwId & 0xff;
 
-    if (len)
-    {
-        while (usbd_ep_write_packet(usbd_dev, 0x82, buf, 4) == 0)
-            ;
-    }
+    // printf("DevId: 0x%02x%02x%02x%02x\n", 0xDE, 0xCA, 0x01, 0x30);
+    printf("DevId: 0x%02x%02x%02x%02x\n", buf[0], buf[1], buf[2], buf[3]);
+    // usbd_ep_write_packet(usbd_dev, 0x82, buf, 4);
 }
 
 static void cdcacm_set_config(usbd_device *usbd_dev, uint16_t wValue)
 {
     (void)wValue;
 
+    // 0x8n means IN (IN is host IN, thus uC OUT)
+
+    // OUT (data from host)
     usbd_ep_setup(usbd_dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, cdcacm_data_rx_cb);
+    // IN (data to host)
     usbd_ep_setup(usbd_dev, 0x82, USB_ENDPOINT_ATTR_BULK, 64, NULL);
+    // IN (interrupt data to host)
     usbd_ep_setup(usbd_dev, 0x83, USB_ENDPOINT_ATTR_INTERRUPT, 16, NULL);
 
     usbd_register_control_callback(
@@ -326,11 +389,11 @@ static void setup_leds(void)
 {
     rcc_periph_clock_enable(RCC_GPIOA);
     gpio_mode_setup(GPIOA, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO8);
+    gpio_set(GPIOA, GPIO8);
 }
 
 static void setup_usb(usbd_device **usbd_dev)
 {
-    rcc_periph_clock_enable(RCC_OTGFS);
     gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO9 | GPIO11 | GPIO12);
     gpio_set_af(GPIOA, GPIO_AF10, GPIO9 | GPIO11 | GPIO12);
 
@@ -383,22 +446,6 @@ static void setup_systick(void)
     systick_interrupt_enable();
 }
 
-volatile uint32_t system_millis;
-
-/* Called when systick fires */
-void sys_tick_handler(void)
-{
-    system_millis++;
-}
-
-/* sleep for delay milliseconds */
-static void msleep(uint32_t delay)
-{
-    uint32_t wake = system_millis + delay;
-    while (wake > system_millis)
-        ;
-}
-
 static void txcallback(dwDevice_t *dev)
 {
 }
@@ -415,41 +462,97 @@ static void rxfailedcallback(dwDevice_t *dev)
 {
 }
 
-int main(void)
+static StaticTask_t xMainTask;
+static StackType_t xMainStack[configMINIMAL_STACK_SIZE];
+
+static StaticTask_t xDWMTask;
+static StackType_t xDWMStack[configMINIMAL_STACK_SIZE];
+
+static void setup_dwm(void)
+{
+    // dwInit(dwm, &dwOps); // Init libdw
+    // dwConfigure(dwm);    // Configure the dw1000 chip
+    // dwTime_t delay = {.full = 0};
+    // dwSetAntenaDelay(dwm, delay);
+    // dwAttachSentHandler(dwm, txcallback);
+    // dwAttachReceivedHandler(dwm, rxcallback);
+    // dwAttachReceiveTimeoutHandler(dwm, rxTimeoutCallback);
+    // dwAttachReceiveFailedHandler(dwm, rxfailedcallback);
+    // dwNewConfiguration(dwm);
+    // dwSetDefaults(dwm);
+    // dwEnableMode(dwm, MODE_SHORTDATA_FAST_ACCURACY);
+    // dwSetChannel(dwm, CHANNEL_2);
+    // dwSetPreambleCode(dwm, PREAMBLE_CODE_64MHZ_9);
+    // dwCommitConfiguration(dwm);
+}
+
+static void dwm_task(void *pvParameters)
+{
+    setup_dwm();
+
+    while (1)
+    {
+        dwHandleInterrupt(dwm);
+    }
+}
+
+static void main_task(void *pvParameters)
 {
     usbd_device *usbd_dev = NULL;
-
-    setup_boot_button();
-
-    setup_clock();
-    setup_leds();
     setup_usb(&usbd_dev);
-    setup_spi();
-    setup_systick();
 
-    // originally part of crazyflie init code
+    globalUSB = usbd_dev;
+
     dwInit(dwm, &dwOps); // Init libdw
-    dwConfigure(dwm);    // Configure the dw1000 chip
-
-    dwTime_t delay = {.full = 0};
-    dwSetAntenaDelay(dwm, delay);
-
-    dwAttachSentHandler(dwm, txcallback);
-    dwAttachReceivedHandler(dwm, rxcallback);
-    dwAttachReceiveTimeoutHandler(dwm, rxTimeoutCallback);
-    dwAttachReceiveFailedHandler(dwm, rxfailedcallback);
-
-    dwNewConfiguration(dwm);
-    dwSetDefaults(dwm);
-    dwEnableMode(dwm, MODE_SHORTDATA_FAST_ACCURACY);
-    dwSetChannel(dwm, CHANNEL_2);
-    dwSetPreambleCode(dwm, PREAMBLE_CODE_64MHZ_9);
-
-    dwCommitConfiguration(dwm);
+    // dwConfigure(dwm);    // Configure the dw1000 chip
 
     while (1)
     {
         usbd_poll(usbd_dev);
-        dwHandleInterrupt(dwm);
     }
+}
+
+int main(void)
+{
+    setup_boot_button();
+
+    setup_clock();
+    setup_leds();
+    setup_spi();
+    setup_systick();
+
+    // Setup main task
+    xTaskCreateStatic(main_task, "main", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, xMainStack, &xMainTask);
+    // xTaskCreateStatic(dwm_task, "dwm", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 3, xDWMStack, &xDWMTask);
+
+    // Start the FreeRTOS scheduler
+    vTaskStartScheduler();
+
+    return 0;
+}
+
+// Freertos required callbacks
+void vApplicationGetIdleTaskMemory(StaticTask_t **ppxIdleTaskTCBBuffer, StackType_t **ppxIdleTaskStackBuffer, uint32_t *pulIdleTaskStackSize)
+{
+    static StaticTask_t xIdleTaskTCB;
+    static StackType_t uxIdleTaskStack[configMINIMAL_STACK_SIZE];
+    *ppxIdleTaskTCBBuffer = &xIdleTaskTCB;
+    *ppxIdleTaskStackBuffer = uxIdleTaskStack;
+    *pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
+}
+
+void vApplicationGetTimerTaskMemory(StaticTask_t **ppxTimerTaskTCBBuffer, StackType_t **ppxTimerTaskStackBuffer, uint32_t *pulTimerTaskStackSize)
+{
+    static StaticTask_t xTimerTaskTCB;
+    static StackType_t uxTimerTaskStack[configTIMER_TASK_STACK_DEPTH];
+    *ppxTimerTaskTCBBuffer = &xTimerTaskTCB;
+    *ppxTimerTaskStackBuffer = uxTimerTaskStack;
+    *pulTimerTaskStackSize = configTIMER_TASK_STACK_DEPTH;
+}
+
+void vAssertCalled(unsigned long ulLine, const char *const pcFileName)
+{
+    printf("Assert failed at %s:%lu", pcFileName, ulLine);
+    while (1)
+        ;
 }
