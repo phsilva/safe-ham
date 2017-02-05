@@ -470,21 +470,81 @@ static StackType_t xDWMStack[configMINIMAL_STACK_SIZE];
 
 static void setup_dwm(void)
 {
-    // dwInit(dwm, &dwOps); // Init libdw
-    // dwConfigure(dwm);    // Configure the dw1000 chip
-    // dwTime_t delay = {.full = 0};
-    // dwSetAntenaDelay(dwm, delay);
-    // dwAttachSentHandler(dwm, txcallback);
-    // dwAttachReceivedHandler(dwm, rxcallback);
-    // dwAttachReceiveTimeoutHandler(dwm, rxTimeoutCallback);
-    // dwAttachReceiveFailedHandler(dwm, rxfailedcallback);
-    // dwNewConfiguration(dwm);
-    // dwSetDefaults(dwm);
-    // dwEnableMode(dwm, MODE_SHORTDATA_FAST_ACCURACY);
-    // dwSetChannel(dwm, CHANNEL_2);
-    // dwSetPreambleCode(dwm, PREAMBLE_CODE_64MHZ_9);
-    // dwCommitConfiguration(dwm);
+    dwInit(dwm, &dwOps);
+    dwConfigure(dwm);
+    dwTime_t delay = {.full = 0};
+    dwSetAntenaDelay(dwm, delay);
+    dwAttachSentHandler(dwm, txcallback);
+    dwAttachReceivedHandler(dwm, rxcallback);
+    dwAttachReceiveTimeoutHandler(dwm, rxTimeoutCallback);
+    dwAttachReceiveFailedHandler(dwm, rxfailedcallback);
+    dwNewConfiguration(dwm);
+    dwSetDefaults(dwm);
+    dwEnableMode(dwm, MODE_SHORTDATA_FAST_ACCURACY);
+    dwSetChannel(dwm, CHANNEL_2);
+    dwSetPreambleCode(dwm, PREAMBLE_CODE_64MHZ_9);
+    dwCommitConfiguration(dwm);
 }
+
+// Packet format with compressed PAN and 64Bit addresses
+// Maximum 64 bytes payload
+typedef struct packet_s
+{
+    union {
+        uint16_t fcf;
+        struct
+        {
+            uint16_t type : 3;
+            uint16_t security : 1;
+            uint16_t framePending : 1;
+            uint16_t ack : 1;
+            uint16_t ipan : 1;
+            uint16_t reserved : 3;
+            uint16_t destAddrMode : 2;
+            uint16_t version : 2;
+            uint16_t srcAddrMode : 2;
+        } fcf_s;
+    };
+
+    uint8_t seq;
+    uint16_t pan;
+    uint8_t destAddress[8];
+    uint8_t sourceAddress[8];
+
+    uint8_t payload[64];
+} __attribute__((packed)) packet_t;
+
+#define MAC80215_PACKET_INIT(packet, TYPE) \
+    packet.fcf_s.type = (TYPE);            \
+    packet.fcf_s.security = 0;             \
+    packet.fcf_s.framePending = 0;         \
+    packet.fcf_s.ack = 0;                  \
+    packet.fcf_s.ipan = 1;                 \
+    packet.fcf_s.destAddrMode = 3;         \
+    packet.fcf_s.version = 1;              \
+    packet.fcf_s.srcAddrMode = 3;
+
+#define MAC802154_TYPE_BEACON 0
+#define MAC802154_TYPE_DATA 1
+#define MAC802154_TYPE_ACK 2
+#define MAC802154_TYPE_CMD 3
+
+#define MAC802154_HEADER_LENGTH 21
+
+// The four packets for ranging
+#define POLL 0x01 // Poll is initiated by the tag
+#define ANSWER 0x02
+#define FINAL 0x03
+#define REPORT 0x04 // Report contains all measurement from the anchor
+
+#define TYPE 0
+#define SEQ 1
+
+static packet_t rxPacket;
+static packet_t txPacket;
+static volatile uint8_t curr_seq = 0;
+
+static uint8_t base_address[] = {0, 0, 0, 0, 0, 0, 0xcf, 0xbc};
 
 static void dwm_task(void *pvParameters)
 {
@@ -492,7 +552,7 @@ static void dwm_task(void *pvParameters)
 
     while (1)
     {
-        dwHandleInterrupt(dwm);
+        msleep(100);
     }
 }
 
@@ -502,9 +562,6 @@ static void main_task(void *pvParameters)
     setup_usb(&usbd_dev);
 
     globalUSB = usbd_dev;
-
-    dwInit(dwm, &dwOps); // Init libdw
-    // dwConfigure(dwm);    // Configure the dw1000 chip
 
     while (1)
     {
@@ -523,7 +580,7 @@ int main(void)
 
     // Setup main task
     xTaskCreateStatic(main_task, "main", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, xMainStack, &xMainTask);
-    // xTaskCreateStatic(dwm_task, "dwm", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 3, xDWMStack, &xDWMTask);
+    xTaskCreateStatic(dwm_task, "dwm", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, xDWMStack, &xDWMTask);
 
     // Start the FreeRTOS scheduler
     vTaskStartScheduler();
