@@ -19,7 +19,6 @@
 
 #include "../common/button_boot.h"
 
-#include <stdlib.h>
 #include <stdio.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/gpio.h>
@@ -446,8 +445,11 @@ static void setup_systick(void)
     systick_interrupt_enable();
 }
 
-static void txcallback(dwDevice_t *dev)
+static void txcallback(dwDevice_t *dwm)
 {
+    dwTime_t departure;
+    dwGetTransmitTimestamp(dwm, &departure);
+    printf("tx at %04x\r\n", (unsigned int)departure.low32);
 }
 
 static void rxcallback(dwDevice_t *dev)
@@ -462,12 +464,6 @@ static void rxfailedcallback(dwDevice_t *dev)
 {
 }
 
-static StaticTask_t xMainTask;
-static StackType_t xMainStack[configMINIMAL_STACK_SIZE];
-
-static StaticTask_t xDWMTask;
-static StackType_t xDWMStack[configMINIMAL_STACK_SIZE];
-
 static void setup_dwm(void)
 {
     dwInit(dwm, &dwOps);
@@ -478,12 +474,12 @@ static void setup_dwm(void)
     dwAttachReceivedHandler(dwm, rxcallback);
     dwAttachReceiveTimeoutHandler(dwm, rxTimeoutCallback);
     dwAttachReceiveFailedHandler(dwm, rxfailedcallback);
-    dwNewConfiguration(dwm);
-    dwSetDefaults(dwm);
-    dwEnableMode(dwm, MODE_SHORTDATA_FAST_ACCURACY);
-    dwSetChannel(dwm, CHANNEL_2);
-    dwSetPreambleCode(dwm, PREAMBLE_CODE_64MHZ_9);
-    dwCommitConfiguration(dwm);
+    // dwNewConfiguration(dwm);
+    // dwSetDefaults(dwm);
+    // dwEnableMode(dwm, MODE_SHORTDATA_FAST_ACCURACY);
+    // dwSetChannel(dwm, CHANNEL_2);
+    // dwSetPreambleCode(dwm, PREAMBLE_CODE_64MHZ_9);
+    // dwCommitConfiguration(dwm);
 }
 
 // Packet format with compressed PAN and 64Bit addresses
@@ -544,14 +540,58 @@ static packet_t rxPacket;
 static packet_t txPacket;
 static volatile uint8_t curr_seq = 0;
 
+static uint8_t my_address[] = {0, 0, 0, 0, 0, 0, 0xdf, 0xcc};
 static uint8_t base_address[] = {0, 0, 0, 0, 0, 0, 0xcf, 0xbc};
+
+static StaticTask_t xMainTask;
+static StackType_t xMainStack[configMINIMAL_STACK_SIZE];
+
+static StaticTask_t xDWMTask;
+static StackType_t xDWMStack[configMINIMAL_STACK_SIZE];
+
+static StaticTask_t xTestTask;
+static StackType_t xTestStack[configMINIMAL_STACK_SIZE];
+
+static int dwm_ready = 0;
+static int dwm_in_use = 0;
+
+static void test_task(void *pvParameters)
+{
+    while (1)
+    {
+        if (dwm_ready && !dwm_in_use)
+        {
+            dwIdle(dwm);
+
+            txPacket.payload[TYPE] = POLL;
+            txPacket.payload[SEQ] = ++curr_seq;
+
+            memcpy(txPacket.sourceAddress, my_address, 8);
+            memcpy(txPacket.destAddress, base_address, 8);
+
+            dwNewTransmit(dwm);
+            dwSetDefaults(dwm);
+            dwSetData(dwm, (uint8_t *)&txPacket, MAC802154_HEADER_LENGTH + 2);
+            dwWaitForResponse(dwm, true);
+            dwStartTransmit(dwm);
+
+            printf("transmission finished\n");
+        }
+        msleep(5000);
+    }
+}
 
 static void dwm_task(void *pvParameters)
 {
     setup_dwm();
 
+    dwm_ready = 1;
+
     while (1)
     {
+        dwm_in_use = 1;
+        dwHandleInterrupt(dwm);
+        dwm_in_use = 0;
         msleep(100);
     }
 }
@@ -581,6 +621,7 @@ int main(void)
     // Setup main task
     xTaskCreateStatic(main_task, "main", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, xMainStack, &xMainTask);
     xTaskCreateStatic(dwm_task, "dwm", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, xDWMStack, &xDWMTask);
+    xTaskCreateStatic(test_task, "test", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, xTestStack, &xTestTask);
 
     // Start the FreeRTOS scheduler
     vTaskStartScheduler();
