@@ -66,17 +66,17 @@ void ledOn(void)
     gpio_clear(GPIOA, GPIO8);
 }
 
-static void ledOff(void)
+void ledOff(void)
 {
     gpio_set(GPIOA, GPIO8);
 }
 
-static void toggleLed()
+void toggleLed()
 {
     gpio_toggle(GPIOA, GPIO8);
 }
 
-static void debugLed(uint8_t n)
+void debugLed(uint8_t n)
 {
     for (uint8_t i = 0; i < n; i++)
     {
@@ -332,7 +332,7 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
     buf[2] = (dwId >> 8) & 0xff;
     buf[3] = dwId & 0xff;
 
-    printf("DevId: 0x%02x%02x%02x%02x\n", buf[0], buf[1], buf[2], buf[3]);
+    // printf("DevId: 0x%02x%02x%02x%02x\n", buf[0], buf[1], buf[2], buf[3]);
 }
 
 static void cdcacm_set_config(usbd_device *usbd_dev, uint16_t wValue)
@@ -434,17 +434,41 @@ static StackType_t xDWMStack[configMINIMAL_STACK_SIZE];
 
 static void set_spi_slow()
 {
-    spi_set_baudrate_prescaler(SPI1, SPI_CR1_BAUDRATE_FPCLK_DIV_256);
+    spi_disable(SPI1);
+
+    spi_init_master(SPI1, SPI_CR1_BAUDRATE_FPCLK_DIV_256,
+                    /* high or low for the peripheral device */
+                    SPI_CR1_CPOL_CLK_TO_0_WHEN_IDLE,
+                    /* CPHA: Clock phase: read on rising edge of clock */
+                    SPI_CR1_CPHA_CLK_TRANSITION_1,
+                    /* DFF: Date frame format (8 or 16 bit) */
+                    SPI_CR1_DFF_8BIT,
+                    /* Most or Least Sig Bit First */
+                    SPI_CR1_MSBFIRST);
+
+    spi_enable(SPI1);
 }
 
 static void set_spi_fast()
 {
-    spi_set_baudrate_prescaler(SPI1, SPI_CR1_BAUDRATE_FPCLK_DIV_16);
+    spi_disable(SPI1);
+
+    spi_init_master(SPI1, SPI_CR1_BAUDRATE_FPCLK_DIV_8,
+                    /* high or low for the peripheral device */
+                    SPI_CR1_CPOL_CLK_TO_0_WHEN_IDLE,
+                    /* CPHA: Clock phase: read on rising edge of clock */
+                    SPI_CR1_CPHA_CLK_TRANSITION_1,
+                    /* DFF: Date frame format (8 or 16 bit) */
+                    SPI_CR1_DFF_8BIT,
+                    /* Most or Least Sig Bit First */
+                    SPI_CR1_MSBFIRST);
+
+    spi_enable(SPI1);
 }
 
 static void dwm_task(void *pvParameters)
 {
-    msleep(5000);
+    // msleep(5000);
 
     /* Default communication configuration. We use here EVK1000's default mode (mode 3). */
     dwt_config_t config = {
@@ -468,9 +492,7 @@ static void dwm_task(void *pvParameters)
     static uint8 tx_msg[] = {0xC5, 0, 'D', 'E', 'C', 'A', 'W', 'A', 'V', 'E', 0, 0};
     /* Index to access to sequence number of the blink frame in the tx_msg array. */
 
-    msleep(5000);
-
-    set_spi_slow();
+    // msleep(5000);
 
     gpio_mode_setup(GPIOA, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO0);
     gpio_clear(GPIOA, GPIO0);
@@ -478,26 +500,39 @@ static void dwm_task(void *pvParameters)
 
     msleep(5);
 
-    printf("reset state: 0x%02x", gpio_get(GPIOA, GPIO0));
+    set_spi_slow();
+
+    // printf("reset state: 0x%02x", gpio_get(GPIOA, GPIO0));
 
     if (dwt_initialise(DWT_LOADNONE) == DWT_ERROR)
     {
-        printf("INIT FAILED\n");
+        // debugLed(2);
         while (1)
         {
         }
     }
 
+    while (!(dwt_read32bitreg(SYS_STATUS_ID) & SYS_STATUS_CPLOCK))
+    {
+    }
+
+    // debugLed(5);
+
     set_spi_fast();
 
-    printf("init ready!\n");
+    // printf("init ready!\n");
 
     /* Configure DW1000. See NOTE 3 below. */
     dwt_configure(&config);
 
-    printf("configure ready!\n");
+    // printf("configure ready!\n");
 
     /* Loop forever sending frames periodically. */
+
+    // debugLed(4);
+
+    uint32 status_reg = 0;
+
     while (1)
     {
         /* Write frame data to DW1000 and prepare transmission. See NOTE 4 below.*/
@@ -505,27 +540,39 @@ static void dwm_task(void *pvParameters)
         dwt_writetxfctrl(sizeof(tx_msg), 0, 0);     /* Zero offset in TX buffer, no ranging. */
 
         /* Start transmission. */
-        printf("about to tx\n");
+        // printf("about to tx\n");
         dwt_starttx(DWT_START_TX_IMMEDIATE);
 
         /* Poll DW1000 until TX frame sent event set. See NOTE 5 below.
          * STATUS register is 5 bytes long but, as the event we are looking at is in the first byte of the register, we can use this simplest API
          * function to access it.*/
-        while (!(dwt_read32bitreg(SYS_STATUS_ID) & SYS_STATUS_TXFRS))
+        while (!((status_reg = dwt_read32bitreg(SYS_STATUS_ID)) & (SYS_STATUS_TXFRS | SYS_STATUS_TXERR)))
         {
-            printf("waiting for tx ready\n");
-        };
+        }
 
-        /* Clear TX frame sent event. */
-        dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS);
+        if (status_reg & SYS_STATUS_TXFRS)
+        {
+            /* Clear TX frame sent event. */
+            dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS);
 
-        toggleLed();
+            toggleLed();
+
+            /* Increment the blink frame sequence number (modulo 256). */
+            tx_msg[BLINK_FRAME_SN_IDX]++;
+        }
+
+        if (status_reg & SYS_STATUS_TXERR)
+        {
+            if (status_reg & SYS_STATUS_CLKPLL_LL)
+                debugLed(2);
+            if (status_reg & SYS_STATUS_RFPLL_LL)
+                debugLed(3);
+            if (status_reg & SYS_STATUS_TXBERR)
+                debugLed(5);
+        }
 
         /* Execute a delay between transmissions. */
         msleep(TX_DELAY_MS);
-
-        /* Increment the blink frame sequence number (modulo 256). */
-        tx_msg[BLINK_FRAME_SN_IDX]++;
     }
 }
 
@@ -552,7 +599,7 @@ int main(void)
     setup_systick();
 
     // Setup main task
-    xTaskCreateStatic(main_task, "main", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, xMainStack, &xMainTask);
+    // xTaskCreateStatic(main_task, "main", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, xMainStack, &xMainTask);
     xTaskCreateStatic(dwm_task, "dwm", configMINIMAL_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, xDWMStack, &xDWMTask);
 
     // Start the FreeRTOS scheduler
@@ -582,7 +629,8 @@ void vApplicationGetTimerTaskMemory(StaticTask_t **ppxTimerTaskTCBBuffer, StackT
 
 void vAssertCalled(unsigned long ulLine, const char *const pcFileName)
 {
-    printf("Assert failed at %s:%lu", pcFileName, ulLine);
+    // printf("Assert failed at %s:%lu", pcFileName, ulLine);
+    debugLed(10);
     while (1)
         ;
 }
