@@ -17,12 +17,9 @@
 ## along with this library.  If not, see <http://www.gnu.org/licenses/>.
 ##
 
-CFLAGS += -I.. -I../../libdw1000/inc -I../../rtos/include -I../../rtos/portable/GCC/ARM_CM4F -I../../decadriver
+CFLAGS += -I.. -I../../decadriver
 
-OBJS  = ../common/button_boot.o
-OBJS += ../../libdw1000/src/libdw1000Spi.o ../../libdw1000/src/libdw1000.o
-OBJS += ../../rtos/tasks.o ../../rtos/timers.o ../../rtos/list.o ../../rtos/queue.o
-OBJS += ../../rtos/portable/GCC/ARM_CM4F/port.o ../../rtos/portable/MemMang/heap_1.o
+OBJS  = ../common/button_boot.o ../common/peripheral.o ../common/usb.o ../common/dw1000.o ../common/util.o
 OBJS += ../../decadriver/deca_device.o ../../decadriver/deca_params_init.o
 
 BINARY = safe-anchor-tx
