@@ -16,16 +16,16 @@ static void setup_dw1000(void)
 {
     /* Default communication configuration. We use here EVK1000's default mode (mode 3). */
     dwt_config_t config = {
-        2,               /* Channel number. */
-        DWT_PRF_64M,     /* Pulse repetition frequency. */
-        DWT_PLEN_1024,   /* Preamble length. Used in TX only. */
-        DWT_PAC32,       /* Preamble acquisition chunk size. Used in RX only. */
-        9,               /* TX preamble code. Used in TX only. */
-        9,               /* RX preamble code. Used in RX only. */
-        1,               /* 0 to use standard SFD, 1 to use non-standard SFD. */
-        DWT_BR_110K,     /* Data rate. */
+        5,               /* Channel number. */
+        DWT_PRF_16M,     /* Pulse repetition frequency. */
+        DWT_PLEN_128,    /* Preamble length. Used in TX only. */
+        DWT_PAC8,        /* Preamble acquisition chunk size. Used in RX only. */
+        4,               /* TX preamble code. Used in TX only. */
+        4,               /* RX preamble code. Used in RX only. */
+        0,               /* 0 to use standard SFD, 1 to use non-standard SFD. */
+        DWT_BR_6M8,      /* Data rate. */
         DWT_PHRMODE_STD, /* PHY header mode. */
-        (1025 + 64 - 32) /* SFD timeout (preamble length + 1 + SFD length - PAC size). Used in RX only. */
+        (128 + 1 + 64 - 8) /* SFD timeout (preamble length + 1 + SFD length - PAC size). Used in RX only. */
     };
 
     /* The frame sent in this example is an 802.15.4e standard blink. It is a 12-byte frame composed of the following fields:
@@ -142,7 +142,7 @@ int main(void)
         usbd_poll(usbd_dev);
 
         /* Execute a delay between transmissions. */
-        msleep(TX_DELAY_MS);
+        msleep(100);
     }
 
     return 0;

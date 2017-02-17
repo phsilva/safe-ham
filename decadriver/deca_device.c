@@ -437,44 +437,34 @@ void dwt_configure(dwt_config_t *config)
         dw1000local.sysCFGreg &= (~SYS_CFG_RXM110K);
     }
 
-    // debugLed(3);
-
     dw1000local.longFrames = config->phrMode;
 
     dw1000local.sysCFGreg &= ~SYS_CFG_PHR_MODE_11;
     dw1000local.sysCFGreg |= (SYS_CFG_PHR_MODE_11 & (config->phrMode << SYS_CFG_PHR_MODE_SHFT));
-
-    // printf("p1\n");
 
     dwt_write32bitreg(SYS_CFG_ID, dw1000local.sysCFGreg);
     // Set the lde_replicaCoeff
     dwt_write16bitoffsetreg(LDE_IF_ID, LDE_REPC_OFFSET, reg16);
 
     _dwt_configlde(prfIndex);
-    // printf("p2\n");
 
     // Configure PLL2/RF PLL block CFG/TUNE (for a given channel)
     dwt_write32bitoffsetreg(FS_CTRL_ID, FS_PLLCFG_OFFSET, fs_pll_cfg[chan_idx[chan]]);
     dwt_write8bitoffsetreg(FS_CTRL_ID, FS_PLLTUNE_OFFSET, fs_pll_tune[chan_idx[chan]]);
-    // printf("p3\n");
 
     // Configure RF RX blocks (for specified channel/bandwidth)
     dwt_write8bitoffsetreg(RF_CONF_ID, RF_RXCTRLH_OFFSET, rx_config[bw]);
-    // printf("p4\n");
 
     // Configure RF TX blocks (for specified channel and PRF)
     // Configure RF TX control
     dwt_write32bitoffsetreg(RF_CONF_ID, RF_TXCTRL_OFFSET, tx_config[chan_idx[chan]]);
-    // printf("p5\n");
 
     // Configure the baseband parameters (for specified PRF, bit rate, PAC, and SFD settings)
     // DTUNE0
     dwt_write16bitoffsetreg(DRX_CONF_ID, DRX_TUNE0b_OFFSET, sftsh[config->dataRate][config->nsSFD]);
-    // printf("p6\n");
 
     // DTUNE1
     dwt_write16bitoffsetreg(DRX_CONF_ID, DRX_TUNE1a_OFFSET, dtune1[prfIndex]);
-    // printf("p7\n");
 
     if (config->dataRate == DWT_BR_110K)
     {
