@@ -18,12 +18,12 @@ static void setup_dw1000(void)
 {
     /* Default communication configuration. We use here EVK1000's default mode (mode 3). */
     dwt_config_t config = {
-        5,                /* Channel number. */
-        DWT_PRF_16M,      /* Pulse repetition frequency. */
+        2,                /* Channel number. */
+        DWT_PRF_64M,      /* Pulse repetition frequency. */
         DWT_PLEN_128,     /* Preamble length. Used in TX only. */
         DWT_PAC8,         /* Preamble acquisition chunk size. Used in RX only. */
-        4,                /* TX preamble code. Used in TX only. */
-        4,                /* RX preamble code. Used in RX only. */
+        9,                /* TX preamble code. Used in TX only. */
+        9,                /* RX preamble code. Used in RX only. */
         0,                /* 0 to use standard SFD, 1 to use non-standard SFD. */
         DWT_BR_6M8,       /* Data rate. */
         DWT_PHRMODE_STD,  /* PHY header mode. */
@@ -45,7 +45,7 @@ static void setup_dw1000(void)
 
     set_spi_slow();
 
-    if (dwt_initialise(DWT_LOADNONE) == DWT_ERROR)
+    if (dwt_initialise(DWT_LOADUCODE) == DWT_ERROR)
     {
         while (1)
         {
@@ -87,7 +87,7 @@ int main(void)
     usbd_poll(usbd_dev);
 
     uint32 status_reg = 0;
-    uint8 tx_msg[] = {0xC5, 0, 'D', 'E', 'C', 'A', 'W', 'A', 'V', 'E', 0, 0};
+    uint8 tx_msg[] = {0xC5, 0, 'M', 'E', 'G', 'A', 'F', 'A', 'K', 'E', 0, 0};
 
     while (1)
     {
