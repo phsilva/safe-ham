@@ -21,10 +21,17 @@ const struct usb_device_descriptor dev = {
     .bMaxPacketSize0 = 64,
     .idVendor = 0x0483,  // STMicroelectronics
     .idProduct = 0x5740, // STM32F407
+#ifdef ANCHOR_TX
     .bcdDevice = 0x0200,
     .iManufacturer = 1,
     .iProduct = 2,
     .iSerialNumber = 3,
+#else
+    .bcdDevice = 0x0300,
+    .iManufacturer = 4,
+    .iProduct = 5,
+    .iSerialNumber = 6,
+#endif
     .bNumConfigurations = 1,
 };
 
@@ -175,14 +182,14 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
     int len = usbd_ep_read_packet(usbd_dev, 0x01, buf, 64);
     dw_run = 1;
 
-    // uint32_t dwId = dwt_readdevid();
+    uint32_t dwId = dwt_readdevid();
 
-    // buf[0] = (dwId >> 24) & 0xff;
-    // buf[1] = (dwId >> 16) & 0xff;
-    // buf[2] = (dwId >> 8) & 0xff;
-    // buf[3] = dwId & 0xff;
+    buf[0] = (dwId >> 24) & 0xff;
+    buf[1] = (dwId >> 16) & 0xff;
+    buf[2] = (dwId >> 8) & 0xff;
+    buf[3] = dwId & 0xff;
 
-    // printf("DevId: 0x%02x%02x%02x%02x\n", buf[0], buf[1], buf[2], buf[3]);
+    printf("DevId: 0x%02x%02x%02x%02x\r\n", buf[0], buf[1], buf[2], buf[3]);
 }
 
 /* Buffer to be used for control requests. */

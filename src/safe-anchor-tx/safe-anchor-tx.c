@@ -4,6 +4,8 @@
 #include "deca_regs.h"
 
 #include "../common/peripheral.h"
+
+#define ANCHOR_TX #to get unique usb code for TX and RX
 #include "../common/usb.h"
 #include "../common/util.h"
 
@@ -16,16 +18,16 @@ static void setup_dw1000(void)
 {
     /* Default communication configuration. We use here EVK1000's default mode (mode 3). */
     dwt_config_t config = {
-        5,               /* Channel number. */
-        DWT_PRF_16M,     /* Pulse repetition frequency. */
-        DWT_PLEN_128,    /* Preamble length. Used in TX only. */
-        DWT_PAC8,        /* Preamble acquisition chunk size. Used in RX only. */
-        4,               /* TX preamble code. Used in TX only. */
-        4,               /* RX preamble code. Used in RX only. */
-        0,               /* 0 to use standard SFD, 1 to use non-standard SFD. */
-        DWT_BR_6M8,      /* Data rate. */
-        DWT_PHRMODE_STD, /* PHY header mode. */
-        (128 + 1 + 64 - 8) /* SFD timeout (preamble length + 1 + SFD length - PAC size). Used in RX only. */
+        5,                /* Channel number. */
+        DWT_PRF_16M,      /* Pulse repetition frequency. */
+        DWT_PLEN_128,     /* Preamble length. Used in TX only. */
+        DWT_PAC8,         /* Preamble acquisition chunk size. Used in RX only. */
+        4,                /* TX preamble code. Used in TX only. */
+        4,                /* RX preamble code. Used in RX only. */
+        0,                /* 0 to use standard SFD, 1 to use non-standard SFD. */
+        DWT_BR_6M8,       /* Data rate. */
+        DWT_PHRMODE_STD,  /* PHY header mode. */
+        (128 + 1 + 8 - 8) /* SFD timeout (preamble length + 1 + SFD length - PAC size). Used in RX only. */
     };
 
     /* The frame sent in this example is an 802.15.4e standard blink. It is a 12-byte frame composed of the following fields:
@@ -81,7 +83,7 @@ int main(void)
     }
 
     setup_dw1000();
-    printf("OK, DW1000 ready.\n");
+    printf("OK, DW1000 ready.\r\n");
     usbd_poll(usbd_dev);
 
     uint32 status_reg = 0;
@@ -103,11 +105,25 @@ int main(void)
         {
         }
 
+        if (status_reg & SYS_STATUS_CLKPLL_LL)
+        {
+            /* Clear event. */
+            dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_CLKPLL_LL);
+            printf("%ld: ERROR SYS_STATUS_CLKPLL_LL\r\n", system_millis);
+        }
+
+        if (status_reg & SYS_STATUS_RFPLL_LL)
+        {
+            /* Clear event. */
+            dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_RFPLL_LL);
+            printf("%ld: ERROR SYS_STATUS_RFPLL_LL\r\n", system_millis);
+        }
+
         if (status_reg & SYS_STATUS_TXFRS)
         {
             uint32_t rf_status = dwt_read32bitoffsetreg(RF_CONF_ID, RF_STATUS_OFFSET);
 
-            printf("%ld: TX OK: 0x%04lx 0x%04lx\n", system_millis, status_reg, rf_status);
+            printf("%ld: TX OK: 0x%04lx 0x%04lx\r\n", system_millis, status_reg, rf_status);
 
             /* Clear TX frame sent event. */
             dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS);
@@ -117,23 +133,11 @@ int main(void)
         }
         else if (status_reg & SYS_STATUS_TXERR)
         {
-            if (status_reg & SYS_STATUS_CLKPLL_LL)
-            {
-                /* Clear event. */
-                dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_CLKPLL_LL);
-                printf("%ld: ERROR SYS_STATUS_CLKPLL_LL\n", system_millis);
-            }
-            else if (status_reg & SYS_STATUS_RFPLL_LL)
-            {
-                /* Clear event. */
-                dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_RFPLL_LL);
-                printf("%ld: ERROR SYS_STATUS_RFPLL_LL\n", system_millis);
-            }
-            else if (status_reg & SYS_STATUS_TXBERR)
+            if (status_reg & SYS_STATUS_TXBERR)
             {
                 /* Clear event. */
                 dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXBERR);
-                printf("%ld: ERROR SYS_STATUS_TXBERR\n", system_millis);
+                printf("%ld: ERROR SYS_STATUS_TXBERR\r\n", system_millis);
             }
         }
 
