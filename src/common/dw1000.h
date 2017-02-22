@@ -12,6 +12,8 @@ extern "C" {
 #define CLK GPIO5
 #define CS GPIO4
 
+void setup_dw1000(void);
+
 #ifdef __cplusplus
 }
 #endif
