@@ -9,6 +9,8 @@
 #include "../common/dw1000.h"
 
 #define FRAME_LEN_MAX 127
+#define TX_ANT_DLY 16436
+#define RX_ANT_DLY 16436
 
 static volatile uint8_t rx_confirmed = 0;
 static volatile uint8 rx_buffer[FRAME_LEN_MAX];
@@ -69,6 +71,9 @@ int main(void)
 
     dwt_setcallbacks(NULL, &rx_ok_cb, &rx_to_cb, &rx_err_cb);
     dwt_setrxtimeout(60000);
+
+    dwt_setrxantennadelay(RX_ANT_DLY);
+    dwt_settxantennadelay(TX_ANT_DLY);
 
     printf("OK, DW1000 ready: 0x%04lx.\r\n", dwt_read32bitreg(SYS_CFG_ID));
     usbd_poll(usbd_dev);
