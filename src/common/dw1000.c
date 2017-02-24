@@ -130,32 +130,3 @@ void exti1_isr(void)
     exti_reset_request(EXTI1);
     dwt_isr();
 }
-
-//SOME COMMON STUFF
-typedef unsigned long long uint64;
-uint64 get_tx_timestamp_u64(void)
-{
-    uint8 ts_tab[5];
-    uint64 ts = 0;
-    int i;
-    dwt_readtxtimestamp(ts_tab);
-    for (i = 4; i >= 0; i--)
-    {
-        ts <<= 8;
-        ts |= ts_tab[i];
-    }
-    return ts;
-}
-uint64 get_rx_timestamp_u64(void)
-{
-    uint8 ts_tab[5];
-    uint64 ts = 0;
-    int i;
-    dwt_readrxtimestamp(ts_tab);
-    for (i = 4; i >= 0; i--)
-    {
-        ts <<= 8;
-        ts |= ts_tab[i];
-    }
-    return ts;
-}

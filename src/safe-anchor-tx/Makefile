@@ -19,7 +19,7 @@
 
 CFLAGS += -I.. -I../../decadriver
 
-OBJS  = ../common/button_boot.o ../common/peripheral.o ../common/usb.o ../common/dw1000.o ../common/util.o
+OBJS  = ../common/button_boot.o ../common/peripheral.o ../common/usb.o ../common/dw1000.o ../common/util.o ../common/anchor_common.o
 OBJS += ../../decadriver/deca_device.o ../../decadriver/deca_params_init.o
 
 BINARY = safe-anchor-tx
